@@ -1,0 +1,127 @@
+# HighFreq Booking configuration.
+#
+# This example works as is against the local mock (python mock_server.py).
+# For a real service, copy it to config.yaml and adapt every section: find the
+# login steps, URLs and request bodies with your browser's DevTools (Network
+# tab) while you do the same thing by hand.
+#
+# Placeholders, filled in at run time:
+#   {base_url} {date} {timezone}        {vars.<name>}
+#   {slot_start} {slot_end}             local ISO 8601, e.g. 2026-12-01T08:00:00+01:00
+#   {slot_start_utc} {slot_end_utc}     UTC, e.g. 2026-12-01T07:00:00Z
+#   {target.id} {target.name} {target.<any other key of the target>}
+#   {booking.<field>}                   in requests.cancel: a row of my_bookings
+#   ${ENV_NAME}                         value of a secret (environment variable)
+#   ${totp:ENV_NAME}                    current one-time code for a base32 secret
+# A string that is exactly one placeholder keeps the value's type (number, boolean).
+
+base_url: "http://127.0.0.1:8765"
+timezone: "UTC"                 # any IANA zone, e.g. Europe/Berlin, America/New_York
+
+schedule:
+  opens_at: "00:00"             # local time at which a new day opens
+  open_days_ahead: 7            # the day that opens is the opening's date + this many days
+  weekdays: [mon, tue, wed, thu, fri, sat, sun]   # days you want (of the target date)
+  skip_dates: []                # e.g. [2026-12-24, {from: 2026-12-25, to: 2027-01-02}]
+  gate_minutes: 100             # a run proceeds only this close to the next opening
+
+slot:                           # the time range to book on the target date
+  start: "08:00"
+  end: "12:00"
+
+# In order of preference: the first one is tried at the opening, the others
+# when it is taken. `id` is what the service uses; extra keys are allowed.
+targets:
+  - {name: "Target A", id: "a"}
+  - {name: "Target B", id: "b"}
+  - {name: "Target C", id: "c"}
+
+# Constants for request bodies, e.g. an account or resource id: {vars.user_id}
+vars: {}
+
+# Environment variables that must be set (GitHub: repository secrets). Their
+# values, and codes made from them, are masked in every log line.
+secrets: [BOOKER_USERNAME, BOOKER_PASSWORD, BOOKER_TOTP_SECRET]
+
+login:
+  url: "{base_url}/login"
+  # Steps run in order; they stop early once the page URL matches done_url
+  # (e.g. a single sign-on that is still valid). Actions:
+  #   goto: URL | fill: SELECTOR + value | click: SELECTOR | press: SELECTOR + key
+  #   wait_for: SELECTOR | wait_url: REGEX | sleep: SECONDS
+  # Options: optional: true (skip if not there), timeout_s (default 30, optional 5).
+  steps:
+    - {fill: "input[name=username]", value: "${BOOKER_USERNAME}"}
+    - {fill: "input[name=password]", value: "${BOOKER_PASSWORD}"}
+    - {click: "button[type=submit]"}
+    - {fill: "input[name=code]", value: "${totp:BOOKER_TOTP_SECRET}", optional: true}
+    - {click: "button[type=submit]", optional: true}
+  done_url: "/app"              # regex on the page URL: logged in
+  # Where the CSRF token is, if the API needs one: a JS expression (js) and/or
+  # a cookie name (cookie); sent in `header` with every request.
+  csrf:
+    js: "document.querySelector('meta[name=csrf-token]')?.content"
+    header: "X-CSRF-Token"
+  headers:                      # sent with every API request
+    Accept: "application/json"
+
+# The HTTP calls, each with method, url and optional params/json/data/headers.
+# The browser's cookies are sent with all of them.
+requests:
+  # Cheap authenticated call: validates the login and keeps the session alive.
+  session_check:
+    method: GET
+    url: "{base_url}/api/me"
+    ok_status: [200]
+
+  # The booking itself (required).
+  book:
+    method: POST
+    url: "{base_url}/api/bookings"
+    json:
+      target: "{target.id}"
+      date: "{date}"
+      start: "{slot_start_utc}"
+      end: "{slot_end_utc}"
+    ok_status: [200, 201]
+    id_field: "booking.id"      # dotted path to the new booking's id in the reply
+    error_field: "error"        # dotted path to the error message
+    taken_pattern: "unavailable|taken"   # regex on the error: move to the next target
+
+  # Optional: is a target still free? Used for the pre-check and to move on.
+  availability:
+    method: GET
+    url: "{base_url}/api/availability"
+    params: {target: "{target.id}", date: "{date}"}
+    available_field: "available"
+
+  # Optional: my bookings for {date}. Enables "already booked", the check after
+  # booking, the fallback when a booking is lost, and the cleanup.
+  my_bookings:
+    method: GET
+    url: "{base_url}/api/bookings"
+    params: {date: "{date}"}
+    list_field: "bookings"
+    id_field: "id"
+    state_field: "state"
+    target_field: "target"
+    lost_states: [superseded]   # exists, but another booking holds the slot
+    ignore_states: [cancelled]
+
+  # Optional: cancels a lost duplicate during cleanup.
+  cancel:
+    method: DELETE
+    url: "{base_url}/api/bookings/{booking.id}"
+
+# All optional; defaults shown.
+timing:
+  precheck_before_s: 120        # availability of every target this long before the opening
+  retry_every_s: 1.0            # one attempt per interval after the opening...
+  retry_for_s: 300              # ...for this long
+  retry_grace_s: 3              # failures in the first seconds are simply retried
+  check_every_s: 5              # re-check my bookings this often while retrying
+  request_timeout_s: 10
+  keepalive_every_s: 300
+  verify_for_s: 30              # watch my bookings this long after booking
+  cleanup_after_s: 180          # cancel duplicates this long after the opening
+  login_timeout_s: 180

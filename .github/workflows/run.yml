@@ -1,0 +1,69 @@
+name: Run booker
+
+on:
+  # Daily start, in UTC: here 45 min before a 00:00 UTC opening. `bot.py plan`
+  # lets a run proceed only within schedule.gate_minutes of the opening, so in
+  # a time zone with daylight saving you can list both UTC hours. GitHub may
+  # start scheduled runs late or skip them; see "Ways to run it" in the
+  # README. Uncomment once a dry run works.
+  # schedule:
+  #   - cron: "15 23 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only log in and check availability (no booking)"
+        type: boolean
+        default: false
+      target_date:
+        description: "Book this date right away (YYYY-MM-DD), for testing"
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: booker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Run
+    # A self-hosted runner closer to the service is possible, but only in a
+    # private repository: see the README before changing this.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    env:
+      CONFIG: config.yaml
+      DRY_RUN: ${{ inputs.dry_run }}
+      TARGET_DATE: ${{ inputs.target_date }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Plan
+        id: plan
+        run: python bot.py plan --config "$CONFIG"
+
+      # GitHub's Ubuntu images already have Chromium's system libraries.
+      - name: Install Chromium
+        if: steps.plan.outputs.proceed == 'true'
+        run: python -m playwright install chromium
+
+      - name: Log in and book
+        if: steps.plan.outputs.proceed == 'true'
+        env:
+          BOOKER_USERNAME: ${{ secrets.BOOKER_USERNAME }}
+          BOOKER_PASSWORD: ${{ secrets.BOOKER_PASSWORD }}
+          BOOKER_TOTP_SECRET: ${{ secrets.BOOKER_TOTP_SECRET }}
+          OPENING_TS: ${{ steps.plan.outputs.opening_ts }}
+        run: python bot.py run --config "$CONFIG"

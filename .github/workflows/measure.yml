@@ -1,0 +1,64 @@
+name: Measure timing
+
+# Read-only timing measurements around an opening (measure.py). Never books.
+# Manual only: it uses the same account as the booking run, so don't run both
+# for the same opening unless you know the service allows parallel sessions.
+on:
+  workflow_dispatch:
+    inputs:
+      test_lead_min:
+        description: "Pretend the opening is this many minutes away (empty = the real next opening, if within the gate)"
+        type: string
+        default: "8"
+
+concurrency:
+  group: measure
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    env:
+      CONFIG: config.yaml
+      PYTHONUNBUFFERED: "1"
+      TEST_LEAD_MIN: ${{ inputs.test_lead_min }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Plan
+        id: plan
+        if: env.TEST_LEAD_MIN == ''
+        run: python bot.py plan --config "$CONFIG"
+
+      - name: Install Chromium
+        if: steps.plan.outputs.proceed == 'true' || env.TEST_LEAD_MIN != ''
+        run: python -m playwright install chromium
+
+      - name: Measure
+        if: steps.plan.outputs.proceed == 'true' || env.TEST_LEAD_MIN != ''
+        env:
+          BOOKER_USERNAME: ${{ secrets.BOOKER_USERNAME }}
+          BOOKER_PASSWORD: ${{ secrets.BOOKER_PASSWORD }}
+          BOOKER_TOTP_SECRET: ${{ secrets.BOOKER_TOTP_SECRET }}
+          OPENING_TS: ${{ steps.plan.outputs.opening_ts }}
+        run: python measure.py --config "$CONFIG"
+
+      - name: Upload results
+        if: always() && hashFiles('measure-results.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: measure-results
+          path: measure-results.json
+          retention-days: 14
