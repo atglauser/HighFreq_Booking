@@ -1,14 +1,16 @@
 # HighFreq Booking
 
+> **Disclaimer: the version shown here is not really high-frequency.** It
+> contains the complete workflow, but it sends its first request at the
+> opening and then retries once per second. The upgraded version, with the
+> timing work that makes it fast, is not public. For it, or for more
+> information, contact me through GitHub: [@atglauser](https://github.com/atglauser)
+> (open an issue or see my profile).
+
 Log in to a web service with a scripted browser, send a request at the exact
 moment something opens, and keep going until it works: retries, fallback
 targets, a check that the result holds, and cleanup of duplicates. Runs on
 GitHub Actions, on a small server or on your own computer.
-
-> **Public, reduced version.** This repository contains the complete workflow,
-> but not the timing refinements of the version I run privately. For more
-> information, contact me through GitHub: [@atglauser](https://github.com/atglauser)
-> (open an issue or see my profile).
 
 > **Use it responsibly.** Only automate your own accounts, on services whose
 > terms allow it. You are responsible for how you use this code.
